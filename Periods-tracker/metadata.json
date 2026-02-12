@@ -1,0 +1,9 @@
+
+{
+  "name": "LunaFlow: Smart Menstrual Health Tracker",
+  "description": "A comprehensive menstrual health tracking system that uses AI to analyze cycles, symptoms, and flow patterns to detect potential health risks early while promoting awareness.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ]
+}
