@@ -1,10 +1,11 @@
-// export default Dashboard;
 import React, { useState, useEffect } from 'react';
 import { PeriodLog, UserProfile } from '../types';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell } from 'recharts';
-import { Calendar, Activity, AlertCircle, TrendingUp, Droplet, ArrowRight, FileText, Clock, X, ShieldCheck, Utensils, Flower2, Apple, CheckCircle2, Bluetooth } from 'lucide-react';
+import { Calendar, Activity, AlertCircle, TrendingUp, Droplet, ArrowRight, FileText, Clock, X, ShieldCheck, Utensils, Flower2, Apple, CheckCircle2, Bluetooth, Save, Download } from 'lucide-react';
 import { api } from '../services/api'; 
-import LunaClipConnect from './LunaClipConnect'; // --- NEW: Imported LunaClip Component ---
+import LunaClipConnect from './LunaClipConnect'; 
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 interface Props {
   logs: PeriodLog[];
@@ -14,15 +15,19 @@ interface Props {
 const Dashboard: React.FC<Props> = ({ logs, profile }) => {
   const [savedReports, setSavedReports] = useState<any[]>([]);
   const [loadingReports, setLoadingReports] = useState(true);
-  
-  // --- NEW: State to manage the Popup (Modal) for full analysis ---
   const [selectedReport, setSelectedReport] = useState<any | null>(null);
-
-  // --- NEW: State to store live Hemoglobin data from the Bluetooth device ---
   const [liveHb, setLiveHb] = useState<number | null>(null);
+  const [userIdState, setUserIdState] = useState<string | null>(null);
+  const [hbHistory, setHbHistory] = useState<any[]>([]);
+  const [isSavingHb, setIsSavingHb] = useState(false);
+
+  // --- NEW: Secure states to hold the absolute true user data from the database ---
+  const [userName, setUserName] = useState<string>("Patient");
+  const [userAge, setUserAge] = useState<number>(profile?.age || 25);
+  const [userLocation, setUserLocation] = useState<string>(profile?.location || 'N/A');
 
   useEffect(() => {
-    const fetchReports = async () => {
+    const fetchReportsAndHistory = async () => {
       try {
         let userId = null;
         const userStr = localStorage.getItem('user');
@@ -39,8 +44,33 @@ const Dashboard: React.FC<Props> = ({ logs, profile }) => {
         }
 
         if (userId) {
+          setUserIdState(userId); 
+          
+          // 1. Fetch authoritative User Data directly from DB to fix Name/Age bugs
+          try {
+             const userRes = await fetch(`http://localhost:5000/api/data/${userId}`);
+             if (userRes.ok) {
+                 const userData = await userRes.json();
+                 if (userData.name) setUserName(userData.name);
+                 if (userData.profile?.age) setUserAge(userData.profile.age);
+                 if (userData.profile?.location) setUserLocation(userData.profile.location);
+             }
+          } catch(e) { console.error("Could not fetch user profile data"); }
+
+          // 2. Fetch AI Reports
           const reports = await api.getSavedAnalyses(userId);
           setSavedReports(reports);
+
+          // 3. Fetch Hb History
+          try {
+            const hbRes = await fetch(`http://localhost:5000/api/hb/${userId}`);
+            if (hbRes.ok) {
+              const hbData = await hbRes.json();
+              if (Array.isArray(hbData)) setHbHistory(hbData);
+            }
+          } catch (e) {
+            console.error("Could not fetch Hb history:", e);
+          }
         }
       } catch (error) {
         console.error("Failed to fetch saved reports:", error);
@@ -49,12 +79,286 @@ const Dashboard: React.FC<Props> = ({ logs, profile }) => {
       }
     };
     
-    fetchReports();
+    fetchReportsAndHistory();
   }, [logs]);
+
+  const saveHbReading = async () => {
+    if (!liveHb || !userIdState) {
+        alert("Missing user ID or live reading. Please ensure you are logged in.");
+        return;
+    }
+    
+    setIsSavingHb(true);
+    try {
+      const numericHb = parseFloat(liveHb.toString());
+      const res = await fetch('http://localhost:5000/api/hb/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: userIdState, hbValue: numericHb })
+      });
+      
+      let data;
+      try {
+          data = await res.json();
+      } catch (parseError) {
+          throw new Error("Backend did not return valid data. Did you restart your Node.js server?");
+      }
+
+      if (res.ok) {
+        setHbHistory([data.record, ...hbHistory]); 
+        alert("✅ Hemoglobin reading saved successfully!");
+      } else {
+        alert(`❌ Failed to save: ${data.error || 'Unknown Backend Error'}`);
+      }
+    } catch (err: any) {
+      console.error("Failed to save Hb:", err);
+      alert(`⚠️ Connection Error: ${err.message || 'Could not reach backend'}`);
+    } finally {
+      setIsSavingHb(false);
+    }
+  };
+
+  // --- UPDATED FULL REPORT GENERATOR ---
+  const downloadPDFReport = () => {
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+
+    // PDF Title
+    doc.setFontSize(22);
+    doc.setTextColor(79, 70, 229); 
+    doc.text("LunaFlow Medical Check-up Report", pageWidth / 2, 20, { align: 'center' });
+    
+    doc.setFontSize(10);
+    doc.setTextColor(100, 116, 139);
+    doc.text(`Generated on: ${new Date().toLocaleDateString()}`, pageWidth / 2, 28, { align: 'center' });
+
+    // User Demographics Info (Using precise DB state to fix the "Patient" bug)
+    doc.setFontSize(12);
+    doc.setTextColor(15, 23, 42);
+    doc.text(`Patient Name: ${userName}`, 14, 40);
+    doc.text(`Age: ${userAge} years old`, 14, 46);
+    doc.text(`Location: ${userLocation}`, 14, 52);
+
+    let currentY = 65;
+
+    // Table 1: Hemoglobin History
+    doc.setFontSize(14);
+    doc.setTextColor(15, 23, 42);
+    doc.text("Hemoglobin (Hb) History", 14, currentY);
+    const hbData = hbHistory.map(hb => [
+      new Date(hb.date).toLocaleDateString(),
+      new Date(hb.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      `${hb.hbValue} g/dL`,
+      hb.status
+    ]);
+    
+    if (hbData.length > 0) {
+      autoTable(doc, {
+        startY: currentY + 5,
+        head: [['Date', 'Time', 'Hb Level', 'Status']],
+        body: hbData,
+        headStyles: { fillColor: [225, 29, 72] },
+        theme: 'striped'
+      });
+      currentY = (doc as any).lastAutoTable.finalY + 15;
+    } else {
+      doc.setFontSize(10);
+      doc.text("No Hemoglobin data recorded yet.", 14, currentY + 8);
+      currentY += 20;
+    }
+
+    // Table 2: Cycle Logs
+    doc.setFontSize(14);
+    doc.setTextColor(15, 23, 42);
+    doc.text("Recent Menstrual Cycle Logs", 14, currentY);
+    const logData = logs.map(log => [
+      new Date(log.startDate).toLocaleDateString(),
+      `${log.duration} Days`,
+      log.flowIntensity,
+      log.painLevel
+    ]);
+    
+    if (logData.length > 0) {
+      autoTable(doc, {
+        startY: currentY + 5,
+        head: [['Start Date', 'Duration', 'Flow Intensity', 'Pain Level']],
+        body: logData,
+        headStyles: { fillColor: [79, 70, 229] },
+        theme: 'striped'
+      });
+      currentY = (doc as any).lastAutoTable.finalY + 15;
+    } else {
+      doc.setFontSize(10);
+      doc.text("No cycle logs recorded yet.", 14, currentY + 8);
+      currentY += 20;
+    }
+
+    // Table 3: AI Analysis (Restored to 4-columns to match your original screenshot)
+    doc.setFontSize(14);
+    doc.setTextColor(15, 23, 42);
+    doc.text("AI Wellness Assessments", 14, currentY);
+    const reportData = savedReports.map(rep => [
+      new Date(rep.date).toLocaleDateString(),
+      `${rep.overallHealthScore}%`,
+      rep.mlPredictionText === 'None' ? 'Normal' : rep.mlPredictionText,
+      rep.summary // Full Summary Text is back in the table!
+    ]);
+    
+    if (reportData.length > 0) {
+      autoTable(doc, {
+        startY: currentY + 5,
+        head: [['Date', 'Vitality Score', 'ML Assessment', 'Summary']],
+        body: reportData,
+        headStyles: { fillColor: [13, 148, 136] },
+        theme: 'striped',
+        styles: { cellPadding: 4, fontSize: 9 },
+        columnStyles: {
+            0: { cellWidth: 25 },
+            1: { cellWidth: 25 },
+            2: { cellWidth: 30 },
+            3: { cellWidth: 'auto' } // Forces the long summary to wrap perfectly inside the box
+        }
+      });
+    } else {
+      doc.setFontSize(10);
+      doc.text("No AI reports generated yet.", 14, currentY + 8);
+    }
+
+    // --- FULL DETAILED AI REPORTS APPENED TO NEXT PAGE ---
+    if (savedReports.length > 0) {
+      doc.addPage();
+      let yPos = 20;
+
+      doc.setFontSize(18);
+      doc.setTextColor(79, 70, 229); 
+      doc.text("Detailed AI Wellness Reports", 14, yPos);
+      yPos += 12;
+
+      savedReports.forEach((report, index) => {
+        if (yPos > 250) { doc.addPage(); yPos = 20; }
+
+        doc.setFontSize(14);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(15, 23, 42);
+        doc.text(`Report Date: ${new Date(report.date).toLocaleDateString()}`, 14, yPos);
+        yPos += 8;
+
+        doc.setFontSize(11);
+        doc.setTextColor(225, 29, 72); 
+        doc.text(`Vitality Score: ${report.overallHealthScore}%`, 14, yPos);
+        doc.setTextColor(13, 148, 136); 
+        doc.text(`ML Assessment: ${report.mlPredictionText === 'None' ? 'No Risk Detected' : report.mlPredictionText}`, 70, yPos);
+        yPos += 8;
+
+        if (report.risks && report.risks.length > 0) {
+            if (yPos > 260) { doc.addPage(); yPos = 20; }
+            doc.setFontSize(12);
+            doc.setFont("helvetica", "bold");
+            doc.setTextColor(15, 23, 42);
+            doc.text("Secondary Health Indicators:", 14, yPos);
+            yPos += 6;
+            
+            doc.setFont("helvetica", "normal");
+            doc.setFontSize(10);
+            doc.setTextColor(71, 85, 105);
+            report.risks.forEach((risk: any) => {
+                const riskText = `• ${risk.condition} (${risk.riskLevel}): ${risk.reasoning}`;
+                const splitRisk = doc.splitTextToSize(riskText, pageWidth - 28);
+                doc.text(splitRisk, 14, yPos);
+                yPos += (splitRisk.length * 5) + 2;
+                
+                risk.recommendations.forEach((rec: string) => {
+                    const recText = `  - ${rec}`;
+                    const splitRec = doc.splitTextToSize(recText, pageWidth - 28);
+                    doc.text(splitRec, 14, yPos);
+                    yPos += (splitRec.length * 5) + 1;
+                });
+                yPos += 3;
+            });
+        }
+
+        if (report.wellnessPlan?.dietChart && report.wellnessPlan.dietChart.length > 0) {
+            if (yPos > 260) { doc.addPage(); yPos = 20; }
+            doc.setFontSize(12);
+            doc.setFont("helvetica", "bold");
+            doc.setTextColor(15, 23, 42);
+            doc.text("Regional Diet Chart:", 14, yPos);
+            yPos += 6;
+            
+            doc.setFont("helvetica", "normal");
+            doc.setFontSize(10);
+            doc.setTextColor(71, 85, 105);
+            report.wellnessPlan.dietChart.forEach((item: any) => {
+                const dietText = `• ${item.meal.toUpperCase()}: ${item.recommendation}`;
+                const splitDiet = doc.splitTextToSize(dietText, pageWidth - 28);
+                doc.text(splitDiet, 14, yPos);
+                yPos += (splitDiet.length * 5) + 2;
+            });
+            yPos += 4;
+        }
+
+        if (report.wellnessPlan?.yogaPoses && report.wellnessPlan.yogaPoses.length > 0) {
+            if (yPos > 260) { doc.addPage(); yPos = 20; }
+            doc.setFontSize(12);
+            doc.setFont("helvetica", "bold");
+            doc.setTextColor(15, 23, 42);
+            doc.text("Recommended Yoga Routine:", 14, yPos);
+            yPos += 6;
+            
+            doc.setFont("helvetica", "normal");
+            doc.setFontSize(10);
+            doc.setTextColor(71, 85, 105);
+            report.wellnessPlan.yogaPoses.forEach((pose: any) => {
+                const poseText = `• ${pose.name}: ${pose.benefit}`;
+                const splitPose = doc.splitTextToSize(poseText, pageWidth - 28);
+                doc.text(splitPose, 14, yPos);
+                yPos += (splitPose.length * 5) + 2;
+            });
+            yPos += 4;
+        }
+
+        if (report.wellnessPlan?.foodHabits && report.wellnessPlan.foodHabits.length > 0) {
+            if (yPos > 260) { doc.addPage(); yPos = 20; }
+            doc.setFontSize(12);
+            doc.setFont("helvetica", "bold");
+            doc.setTextColor(15, 23, 42);
+            doc.text("Healthy Food Habits:", 14, yPos);
+            yPos += 6;
+            
+            doc.setFont("helvetica", "normal");
+            doc.setFontSize(10);
+            doc.setTextColor(71, 85, 105);
+            report.wellnessPlan.foodHabits.forEach((habit: string, i: number) => {
+                const habitText = `${i + 1}. ${habit}`;
+                const splitHabit = doc.splitTextToSize(habitText, pageWidth - 28);
+                doc.text(splitHabit, 14, yPos);
+                yPos += (splitHabit.length * 5) + 2;
+            });
+            yPos += 8;
+        }
+
+        if (index < savedReports.length - 1) {
+            doc.setDrawColor(226, 232, 240); 
+            doc.line(14, yPos, pageWidth - 14, yPos);
+            yPos += 10;
+        }
+      });
+    }
+
+    // Footer
+    const pageCount = (doc as any).internal.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(8);
+      doc.setTextColor(148, 163, 184);
+      doc.text("LunaFlow & LunaClip Medical Ecosystem - Not a replacement for professional medical advice.", pageWidth / 2, doc.internal.pageSize.getHeight() - 10, { align: 'center' });
+    }
+
+    doc.save("LunaFlow_Comprehensive_Report.pdf");
+  };
 
   const sortedLogsDesc = [...logs].sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime());
   const sortedLogsAsc = [...logs].sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
-
   const lastLog = sortedLogsDesc[0];
 
   const getAverageCycle = () => {
@@ -65,7 +369,6 @@ const Dashboard: React.FC<Props> = ({ logs, profile }) => {
     const diffDays = (newest - oldest) / (1000 * 60 * 60 * 24);
     return Math.round(diffDays / cycleCount);
   };
-
   const calculatedAvgCycle = getAverageCycle();
 
   const getNextPeriodStatus = () => {
@@ -81,7 +384,6 @@ const Dashboard: React.FC<Props> = ({ logs, profile }) => {
     if (diffDays < 0) return { text: `${Math.abs(diffDays)} days late`, subtext: 'Cycle might be irregular' };
     return { text: `In ${diffDays} days`, subtext: `Predicted: ${nextDate.toLocaleDateString()}` };
   };
-
   const status = getNextPeriodStatus();
 
   const getTypicalFlow = () => {
@@ -104,7 +406,6 @@ const Dashboard: React.FC<Props> = ({ logs, profile }) => {
     }
     return { status: 'Stable', msg: 'Cycle appears healthy' };
   };
-
   const health = getHealthStatus();
 
   const chartData = sortedLogsAsc.map((log, index) => {
@@ -126,7 +427,6 @@ const Dashboard: React.FC<Props> = ({ logs, profile }) => {
     { name: 'Normal', value: logs.filter(l => !l.isMissed && l.flowIntensity === 'Normal').length },
     { name: 'Heavy', value: logs.filter(l => !l.isMissed && l.flowIntensity === 'Heavy').length },
   ];
-
   const COLORS = ['#FDE68A', '#F97316', '#DC2626'];
 
   const getRiskColor = (level: string) => {
@@ -139,8 +439,23 @@ const Dashboard: React.FC<Props> = ({ logs, profile }) => {
 
   return (
     <div className="space-y-6 pb-10 relative">
+      
+      {/* PDF Export Header */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-2">
+        <div>
+          <h2 className="text-2xl font-black text-slate-800">Health Overview</h2>
+          <p className="text-sm text-slate-500">Monitor your cycle and blood vitals.</p>
+        </div>
+        <button 
+          onClick={downloadPDFReport}
+          className="bg-slate-900 hover:bg-slate-800 text-white px-5 py-2.5 rounded-2xl font-bold text-sm flex items-center gap-2 shadow-sm transition-colors"
+        >
+          <Download size={18} />
+          Export PDF Report
+        </button>
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* NEXT PERIOD CARD */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden group">
           <div className="flex items-center gap-3 mb-2 text-rose-500">
             <Calendar size={20} />
@@ -153,7 +468,6 @@ const Dashboard: React.FC<Props> = ({ logs, profile }) => {
           <p className="text-slate-400 text-xs mt-1">{status.subtext}</p>
         </div>
 
-        {/* CYCLE LENGTH CARD */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
           <div className="flex items-center gap-3 mb-2 text-indigo-500">
             <Activity size={20} />
@@ -165,7 +479,6 @@ const Dashboard: React.FC<Props> = ({ logs, profile }) => {
           <p className="text-slate-400 text-xs mt-1">Based on last {logs.length} cycles</p>
         </div>
 
-        {/* FLOW LEVEL CARD */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
           <div className="flex items-center gap-3 mb-2 text-orange-500">
             <Droplet size={20} />
@@ -175,7 +488,6 @@ const Dashboard: React.FC<Props> = ({ logs, profile }) => {
           <p className="text-slate-400 text-xs mt-1">Most frequent intensity</p>
         </div>
 
-        {/* HEALTH STATUS CARD */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
           <div className="flex items-center gap-3 mb-2 text-teal-500">
             <AlertCircle size={20} />
@@ -188,10 +500,9 @@ const Dashboard: React.FC<Props> = ({ logs, profile }) => {
         </div>
       </div>
 
-      {/* --- NEW: LUNA CLIP HARDWARE SECTION --- */}
+      {/* LUNA CLIP HARDWARE SECTION */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
         <div className="lg:col-span-1">
-          {/* Passing the state setter directly to the Bluetooth component */}
           <LunaClipConnect onDataReceived={(hb) => setLiveHb(hb)} />
         </div>
         <div className="lg:col-span-2 bg-gradient-to-br from-indigo-50 to-purple-50 p-8 rounded-3xl border border-indigo-100 flex flex-col justify-center shadow-sm">
@@ -208,6 +519,16 @@ const Dashboard: React.FC<Props> = ({ logs, profile }) => {
                 <Activity size={20} className="text-rose-500" /> 
                 {liveHb} <span className="text-sm font-bold text-slate-400">g/dL</span>
               </div>
+              
+              <button 
+                onClick={saveHbReading} 
+                disabled={isSavingHb}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-3 rounded-2xl font-bold text-sm flex items-center gap-2 shadow-sm transition-colors disabled:opacity-50"
+              >
+                <Save size={16} />
+                {isSavingHb ? 'Saving...' : 'Save Reading'}
+              </button>
+
               <div className="flex items-center gap-2 text-xs font-bold text-emerald-600 bg-emerald-100 px-4 py-2 rounded-full border border-emerald-200">
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -224,8 +545,36 @@ const Dashboard: React.FC<Props> = ({ logs, profile }) => {
         </div>
       </div>
 
+      {/* HEMOGLOBIN HISTORY UI */}
+      {hbHistory.length > 0 && (
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 mt-2">
+          <h3 className="text-lg font-semibold mb-6 flex items-center gap-2">
+            <Activity size={18} className="text-rose-500" /> Past Hemoglobin Tests
+          </h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+            {hbHistory.map((hbLog, idx) => (
+              <div key={idx} className="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex flex-col items-center text-center hover:border-indigo-100 transition-colors">
+                <div className="text-xs text-slate-400 mb-2 font-medium flex items-center gap-1">
+                  <Clock size={12} />
+                  {new Date(hbLog.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                </div>
+                <div className="text-2xl font-black text-slate-700 mb-2">
+                  {hbLog.hbValue}
+                </div>
+                <div className={`text-[10px] font-bold uppercase tracking-widest px-3 py-1 rounded-full ${
+                  hbLog.status === 'Normal' ? 'bg-emerald-100 text-emerald-600' : 
+                  hbLog.status === 'Low' ? 'bg-orange-100 text-orange-600' : 'bg-rose-100 text-rose-600'
+                }`}>
+                  {hbLog.status}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* CHARTS SECTION */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-4">
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 h-80">
           <h3 className="text-lg font-semibold mb-6 flex items-center gap-2">
             <TrendingUp size={18} className="text-rose-500" /> Cycle Trends
@@ -283,8 +632,6 @@ const Dashboard: React.FC<Props> = ({ logs, profile }) => {
                 onClick={() => setSelectedReport(report)}
                 className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 hover:shadow-md hover:border-indigo-200 transition-all group flex flex-col h-full cursor-pointer transform hover:-translate-y-1"
               >
-                
-                {/* Date & Prediction Badge */}
                 <div className="flex justify-between items-start mb-4">
                   <div className="flex items-center gap-1.5 text-slate-400 text-xs font-bold uppercase tracking-wider">
                     <Clock size={14} />
@@ -295,7 +642,6 @@ const Dashboard: React.FC<Props> = ({ logs, profile }) => {
                   </div>
                 </div>
 
-                {/* Score & Summary */}
                 <div className="flex items-center gap-4 mb-5">
                   <div className="w-14 h-14 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600 font-black text-xl shrink-0 border border-indigo-100 group-hover:bg-indigo-600 group-hover:text-white transition-colors">
                     {report.overallHealthScore || 0}%
@@ -305,7 +651,6 @@ const Dashboard: React.FC<Props> = ({ logs, profile }) => {
                   </p>
                 </div>
 
-                {/* Info Text */}
                 <div className="mt-auto pt-4 border-t border-slate-50 flex items-center justify-between text-indigo-500 text-xs font-bold opacity-0 group-hover:opacity-100 transition-opacity">
                   Click to view full analysis <ArrowRight size={14} />
                 </div>
@@ -315,12 +660,11 @@ const Dashboard: React.FC<Props> = ({ logs, profile }) => {
         )}
       </div>
 
-      {/* --- NEW: FULL ANALYSIS MODAL (POPUP) --- */}
+      {/* FULL ANALYSIS MODAL (POPUP) */}
       {selectedReport && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-slate-50 rounded-3xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl animate-in zoom-in-95 duration-200">
             
-            {/* Modal Header */}
             <div className="flex items-center justify-between p-6 bg-white border-b border-slate-100 shrink-0">
               <div>
                 <h2 className="text-xl font-black text-slate-800 flex items-center gap-2">
@@ -338,10 +682,8 @@ const Dashboard: React.FC<Props> = ({ logs, profile }) => {
               </button>
             </div>
 
-            {/* Modal Scrollable Content */}
             <div className="p-6 sm:p-8 overflow-y-auto space-y-8 flex-1">
               
-              {/* Top Row: Score & ML */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="bg-gradient-to-br from-indigo-600 via-purple-600 to-rose-500 rounded-3xl p-8 text-white shadow-md flex flex-col justify-center">
                   <div className="flex items-center gap-6 w-full mb-4">
@@ -374,7 +716,6 @@ const Dashboard: React.FC<Props> = ({ logs, profile }) => {
                 </div>
               </div>
 
-              {/* Risks Section */}
               {selectedReport.risks?.length > 0 && (
                 <section>
                   <h3 className="text-lg font-black text-slate-800 mb-4 flex items-center gap-2 px-2">
@@ -404,7 +745,6 @@ const Dashboard: React.FC<Props> = ({ logs, profile }) => {
                 </section>
               )}
 
-              {/* Diet, Yoga, and Habits Section */}
               <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div className="lg:col-span-2 space-y-6">
                   <div className="bg-white rounded-3xl p-8 border border-slate-100 shadow-sm">

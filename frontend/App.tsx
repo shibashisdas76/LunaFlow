@@ -8,7 +8,7 @@ import HistoryTable from './components/HistoryTable';
 import TutorialsView from './components/TutorialsView'; 
 import DoctorsView from './components/DoctorsView'; // ✅ Doctors Feature
 import Auth from './components/Auth';
-import { Heart, History, ShieldAlert, Plus, LayoutDashboard, LogOut, User as UserIcon, MapPin, Search, Loader2, Trash2, BellRing, CalendarCheck, Video, Stethoscope, Sparkles, ArrowRight, Info, Activity, Zap, BookOpen } from 'lucide-react';
+import { Heart, History, ShieldAlert, Plus, LayoutDashboard, LogOut, User as UserIcon, MapPin, Search, Loader2, Trash2, BellRing, CalendarCheck, Video, Stethoscope, Sparkles, ArrowRight, Info, Activity, Zap, BookOpen, Bluetooth } from 'lucide-react';
 
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -240,6 +240,17 @@ const App: React.FC = () => {
                         Curated health & yoga videos.
                       </p>
                    </div>
+
+                   {/* Feature 5 - LUNA CLIP IoT */}
+                   <div className="group p-5 rounded-3xl bg-gradient-to-br from-blue-50 to-blue-100 border border-blue-200 hover:shadow-lg transition-all cursor-default md:col-span-2 lg:col-span-1">
+                      <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center text-blue-500 shadow-sm mb-3 group-hover:scale-110 transition-transform">
+                        <Bluetooth size={24} />
+                      </div>
+                      <h3 className="font-bold text-slate-800 text-lg">LunaClip IoT</h3>
+                      <p className="text-xs text-slate-500 mt-2 leading-relaxed">
+                        Sync live Hemoglobin vitals instantly.
+                      </p>
+                   </div>
                 </div>
 
                 <button 
@@ -270,7 +281,7 @@ const App: React.FC = () => {
 
           <button onClick={() => setActiveTab('dashboard')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl font-bold transition-all ${activeTab === 'dashboard' ? 'bg-rose-500 text-white shadow-lg' : 'text-slate-400 hover:bg-rose-50'}`}><LayoutDashboard size={20} /> Dashboard</button>
           <button onClick={() => setActiveTab('history')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl font-bold transition-all ${activeTab === 'history' ? 'bg-rose-500 text-white shadow-lg' : 'text-slate-400 hover:bg-rose-50'}`}><History size={20} /> My Records</button>
-          <button onClick={() => setActiveTab('analysis')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl font-bold transition-all ${activeTab === 'analysis' ? 'bg-rose-500 text-white shadow-lg' : 'text-slate-400 hover:bg-rose-50'}`}><ShieldAlert size={20} /> AI Analysis</button>
+          <button onClick={() => setActiveTab('analysis')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl font-bold transition-all ${activeTab === 'analysis' ? 'bg-rose-500 text-white shadow-lg' : 'text-slate-400 hover:bg-rose-50'}`}><ShieldAlert size={20} /> Health Analysis</button>
           <button onClick={() => setActiveTab('doctors')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl font-bold transition-all ${activeTab === 'doctors' ? 'bg-rose-500 text-white shadow-lg' : 'text-slate-400 hover:bg-rose-50'}`}><Stethoscope size={20} /> Find Doctors 🏥</button>
           <button onClick={() => setActiveTab('tutorials')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl font-bold transition-all ${activeTab === 'tutorials' ? 'bg-rose-500 text-white shadow-lg' : 'text-slate-400 hover:bg-rose-50'}`}><Video size={20} /> Tutorials 📺</button>
         </div>

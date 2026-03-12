@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const axios = require('axios'); // Added axios for ML API communication
+const axios = require('axios');
 
 const app = express();
 app.use(cors());
@@ -39,7 +39,7 @@ const logSchema = new mongoose.Schema({
   notes: String
 });
 
-// NEW: Schema to save AI Analysis Records (FIXED TO INCLUDE ML TEXT)
+// Schema to save AI Analysis Records
 const analysisRecordSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   date: { type: Date, default: Date.now },
@@ -48,13 +48,22 @@ const analysisRecordSchema = new mongoose.Schema({
   risks: Array, 
   wellnessPlan: Object, 
   disclaimer: String,
-  mlPredictionText: String, // FIX: Added this back!
-  mlWarning: String         // FIX: Added this back!
+  mlPredictionText: String, 
+  mlWarning: String         
+});
+
+// Schema to save Hemoglobin (Hb) Test Records
+const hbRecordSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  date: { type: Date, default: Date.now },
+  hbValue: { type: Number, required: true },
+  status: { type: String, required: true }
 });
 
 const User = mongoose.model('User', userSchema);
 const PeriodLog = mongoose.model('PeriodLog', logSchema);
 const AnalysisRecord = mongoose.model('AnalysisRecord', analysisRecordSchema);
+const HbRecord = mongoose.model('HbRecord', hbRecordSchema);
 
 // --- API Routes ---
 
@@ -90,7 +99,7 @@ app.get('/api/data/:userId', async (req, res) => {
   try {
     const user = await User.findById(req.params.userId);
     const logs = await PeriodLog.find({ userId: req.params.userId }).sort({ startDate: -1 });
-    res.json({ profile: user.profile, logs });
+    res.json({ name: user.name, profile: user.profile, logs });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -110,13 +119,16 @@ app.post('/api/logs', async (req, res) => {
        avgCycle = Math.round(totalDays / logs.length);
     }
 
-    await User.findByIdAndUpdate(userId, { 
-      'profile.age': age,
-      'profile.averageCycleLength': avgCycle 
-    });
+    const updateFields = { 'profile.averageCycleLength': avgCycle };
+    if (age !== undefined && age !== null) {
+        updateFields['profile.age'] = age;
+    }
 
+    // FIXED WARNING HERE
+    const updatedUser = await User.findByIdAndUpdate(userId, { $set: updateFields }, { returnDocument: 'after' });
     const allLogs = await PeriodLog.find({ userId }).sort({ startDate: -1 });
-    res.json({ logs: allLogs, profile: { age, averageCycleLength: avgCycle } });
+    
+    res.json({ logs: allLogs, profile: updatedUser.profile });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -126,8 +138,14 @@ app.post('/api/logs', async (req, res) => {
 app.put('/api/profile/:userId', async (req, res) => {
   try {
     const { profile } = req.body;
-    await User.findByIdAndUpdate(req.params.userId, { profile });
-    res.json({ success: true });
+    const updateObj = {};
+    if (profile.age !== undefined) updateObj['profile.age'] = profile.age;
+    if (profile.averageCycleLength !== undefined) updateObj['profile.averageCycleLength'] = profile.averageCycleLength;
+    if (profile.location !== undefined) updateObj['profile.location'] = profile.location;
+    
+    // FIXED WARNING HERE
+    const updatedUser = await User.findByIdAndUpdate(req.params.userId, { $set: updateObj }, { returnDocument: 'after' });
+    res.json({ success: true, profile: updatedUser.profile });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -140,7 +158,6 @@ app.delete('/api/logs/:id', async (req, res) => {
     await PeriodLog.findByIdAndDelete(req.params.id);
 
     const allLogs = await PeriodLog.find({ userId }).sort({ startDate: -1 });
-    
     const validLogs = allLogs.filter(l => !l.isMissed);
     let avgCycle = 28;
     if (validLogs.length > 1) {
@@ -148,9 +165,9 @@ app.delete('/api/logs/:id', async (req, res) => {
        avgCycle = Math.round(totalDays / validLogs.length);
     }
     
-    await User.findByIdAndUpdate(userId, { 'profile.averageCycleLength': avgCycle });
-
-    res.json({ logs: allLogs, profile: { averageCycleLength: avgCycle } });
+    // FIXED WARNING HERE
+    const updatedUser = await User.findByIdAndUpdate(userId, { $set: { 'profile.averageCycleLength': avgCycle } }, { returnDocument: 'after' });
+    res.json({ logs: allLogs, profile: updatedUser.profile });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -160,9 +177,8 @@ app.delete('/api/logs/:id', async (req, res) => {
 app.delete('/api/reset/:userId', async (req, res) => {
   try {
     await PeriodLog.deleteMany({ userId: req.params.userId });
-    await User.findByIdAndUpdate(req.params.userId, { 
-      'profile.averageCycleLength': 28 
-    });
+    // FIXED WARNING HERE
+    const updatedUser = await User.findByIdAndUpdate(req.params.userId, { $set: { 'profile.averageCycleLength': 28 } }, { returnDocument: 'after' });
     res.json({ success: true, message: "All records reset successfully" });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -204,7 +220,7 @@ app.post('/api/predict', async (req, res) => {
   }
 });
 
-// --- NEW 9. SAVE ANALYSIS ROUTE (FIXED) ---
+// 9. SAVE ANALYSIS ROUTE 
 app.post('/api/analysis/save', async (req, res) => {
   try {
     const { userId, geminiAnalysis, mlPrediction } = req.body;
@@ -218,8 +234,8 @@ app.post('/api/analysis/save', async (req, res) => {
       risks: geminiAnalysis.risks,
       wellnessPlan: geminiAnalysis.wellnessPlan,
       disclaimer: geminiAnalysis.disclaimer,
-      mlPredictionText: mlPrediction.prediction, // FIX: Added this back!
-      mlWarning: mlPrediction.warning            // FIX: Added this back!
+      mlPredictionText: mlPrediction.prediction, 
+      mlWarning: mlPrediction.warning            
     });
 
     await newRecord.save();
@@ -229,10 +245,39 @@ app.post('/api/analysis/save', async (req, res) => {
   }
 });
 
-// --- NEW 10. GET SAVED ANALYSES ---
+// 10. GET SAVED ANALYSES
 app.get('/api/analysis/:userId', async (req, res) => {
   try {
     const records = await AnalysisRecord.find({ userId: req.params.userId }).sort({ date: -1 });
+    res.json(records);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 11. SAVE HEMOGLOBIN RECORD 
+app.post('/api/hb/save', async (req, res) => {
+  try {
+    const { userId, hbValue } = req.body;
+    if (!userId || !hbValue) return res.status(400).json({ error: "Missing data" });
+
+    let status = "Normal";
+    if (hbValue < 11.0) status = "Low";
+    if (hbValue > 15.0) status = "High";
+
+    const newHbLog = new HbRecord({ userId, hbValue, status });
+    await newHbLog.save();
+
+    res.status(201).json({ message: "Hemoglobin test saved!", record: newHbLog });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 12. GET HEMOGLOBIN HISTORY
+app.get('/api/hb/:userId', async (req, res) => {
+  try {
+    const records = await HbRecord.find({ userId: req.params.userId }).sort({ date: -1 });
     res.json(records);
   } catch (error) {
     res.status(500).json({ error: error.message });

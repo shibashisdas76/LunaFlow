@@ -157,9 +157,9 @@ const AnalysisView: React.FC<Props> = ({ logs, profile }) => {
           <div className="w-20 h-20 bg-rose-50 rounded-full flex items-center justify-center mb-6 text-rose-500">
             <Sparkles size={40} />
           </div>
-          <h2 className="text-2xl font-bold mb-3">Holistic Health Analysis</h2>
+          <h2 className="text-2xl font-bold mb-3">Health Analysis</h2>
           <p className="text-slate-500 mb-6 max-w-md">
-            Our ML Model diagnoses your patterns, while Gemini AI generates a personalized wellness plan based on your cycle, symptoms, and location.
+            Our ML Model diagnoses your patterns, while AI generates a personalized wellness plan based on your cycle, symptoms, and location.
           </p>
           
           {profile.location && (
